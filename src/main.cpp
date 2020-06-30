@@ -14,7 +14,8 @@
 #define FALLBACK_MQTT_SERVER "IP of your mqtt server here"
 
 #define PROJECT "Status Indicator"
-#define VERSION "1.0.0"
+#define VERSION "1.1.1"
+#define INTERVAL_MEASUREMENT_MS 60UL * 1000UL
 
 #define MQTT_TOPIC_CMND_GROUP "cmnd/esp8266"
 
@@ -32,7 +33,12 @@
 #define LWT_DISCONNECTED "Disconnected"
 
 #define LED_PIN D2 
-#define LED_COUNT 8
+#define LED_COUNT 18
+
+#define STATE_START 0
+#define STATE_DEFAULT 1
+#define STATE_COLOR 2
+#define STATE_BLINK 3
 
 // Struct for Configuration
 struct Config {
@@ -54,6 +60,14 @@ String topic_stat;
 String topic_cmnd;
 String topic_cmd_pulse;
 
+unsigned long lastMsg = 0;
+
+String states[] = {"START", "DEFAULT", "COLOR", "BLINK"};
+short state = STATE_START;
+unsigned long stateStart;
+short brightness = 50;
+
+
 Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 
@@ -67,37 +81,10 @@ void ledSetAllPixels(uint32_t color) {
 
 }
 
-void ledPulse(uint32_t pulseColor, int pulseCounter) {
-
-  int brightness = 1;
-
-  for (int i = 0; i < pulseCounter; i++)
-  {
-    while (brightness < 255 )
-    {
-      strip.setBrightness(brightness);
-      ledSetAllPixels(pulseColor);
-      delay(1);
-      brightness++;
-    }
-    while (brightness > 1 )
-    {
-      strip.setBrightness(brightness);
-      ledSetAllPixels(pulseColor);
-      delay(1);
-      brightness--;
-    }    
-  }
-    
-  strip.setBrightness(50);
-  strip.clear();
-  strip.show();
-
-}
 
 void ledRotate() {
 
-  for (int rounds = 0; rounds < 8; rounds++) {
+  for (int rounds = 0; rounds < LED_COUNT; rounds++) {
     for (int i = 0; i < 8; i++)
     {
       strip.setBrightness(50 + (10 * rounds));
@@ -116,7 +103,22 @@ void ledRotate() {
   strip.clear();
   strip.show();
   
+}
 
+void ledBlink() {
+
+  unsigned long now = millis();
+  if (now < stateStart + 2000) {
+    brightness = 255;
+    strip.setBrightness(brightness);
+    strip.show();
+    state = STATE_BLINK;
+  } else {
+    brightness = 50;
+    strip.clear();
+    strip.setBrightness(brightness);
+    state = STATE_DEFAULT;
+  }
 }
 
 
@@ -194,11 +196,13 @@ void reconnect() {
 
     // Create a random client ID
     String clientId = mqttClientName;
+    client.setKeepAlive(120);
     Serial.printf("Attempting MQTT connection to server %s as %s ... ", config.mqttServer, clientId.c_str());
     
     // Attempt to connect
     if (client.connect(clientId.c_str(), topic_lwt.c_str(), 1, true, LWT_DISCONNECTED)) {
       Serial.println(" connected.");
+
       // Once connected, publish an announcement...
       client.publish(topic_lwt.c_str(), LWT_CONNECTED, true);
       // ... and resubscribe
@@ -222,12 +226,25 @@ void reconnect() {
 }
 
 
+String getBaseData() {
 
+  String json = "{";
+  json += "\"software_project\": " + String(PROJECT) + ", ";
+  json += "\"software_version\": " + String(VERSION) + ", ";
+  json += "\"wifi_ip_address\": \"" + ipAddress + "\", ";
+  json += "\"mqtt_client_name\": \"" + mqttClientName + "\"";
+  json += "}";
 
+  return json;
+
+}
+
+/*
 String getBaseData() {
 
   DynamicJsonBuffer  jsonBuffer(200);
   JsonObject& root = jsonBuffer.createObject();
+  jsonBuffer.clear();
 
   root["software_project"] = PROJECT;
   root["software_version"] = VERSION;
@@ -238,14 +255,19 @@ String getBaseData() {
   root.printTo(result);
   return result;
 
-  // String json = "{";
-  // json += "\"software_project\": \"" + String(PROJECT) + "\", ";
-  // json += "\"software_version\": \"" + String(VERSION) + "\", ";
-  // json += "\"wifi_ip_address\": \"" + ipAddress + "\", ";
-  // json += "\"mqtt_client_name\": \"" + mqttClientName + "\"";
-  // json += "}";
+}
+*/
 
-  // return json;
+
+String getStatus() {
+
+  String json = "{";
+  json += "\"item_state\": \"" + states[state] + "\", ";
+  json += "\"uptime\": " + String(millis()) + ", ";
+  json += "\"wifi_signal_rssi\": " + String(WiFi.RSSI());
+  json += "}";
+
+  return json;
 
 }
 
@@ -257,12 +279,14 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   if (strcmp(MQTT_TOPIC_TASMOTE_POWER, topic) == 0) {
 
-     Serial.println(F("Change TV Light."));
+    Serial.println(F("Change TV Light."));
     if ((char)payload[1] == 'N') {
-      ledPulse(strip.Color(0,255,0), 4);
+      ledSetAllPixels(strip.Color(0,255,0));
     } else {
-      ledPulse(strip.Color(255,0,0), 4);
+      ledSetAllPixels(strip.Color(255,0,0));
     }
+    state = STATE_BLINK;
+    stateStart = millis();
       
     return;
 
@@ -277,23 +301,56 @@ void callback(char* topic, byte* payload, unsigned int length) {
   JsonObject &message = jsonBuffer.parseObject(payload);
   if (!message.success()) {
     Serial.println(F("Error parsing the JSON."));
-    ledPulse(strip.Color(255,0,0), 4);
+    
+    ledSetAllPixels(strip.Color(255, 0, 0));
+    state = STATE_COLOR;
+    stateStart = millis();
+
   } else {
     char cmnd[32];
     int repeat = message["repeat"] | 3;
     strlcpy(cmnd, message["cmnd"], sizeof(cmnd));
     Serial.printf("Received command: %s, %i-times\n", cmnd, repeat);
     
-    if (strcmp("pulse", cmnd) == 0) {
-      ledPulse(strip.Color(0,0,255), repeat);
+    if (strcmp("blink", cmnd) == 0) {
+
+      state = STATE_BLINK;
+      stateStart = millis();
+
+      int r = message["red"] | 255;
+      int g = message["green"] | 255;
+      int b = message["blue"] | 255;
+      ledSetAllPixels(strip.Color(r, g, b));
+
     }
 
-    if (strcmp("rotate", cmnd) == 0) {
-      ledRotate();  
+    if (strcmp("color", cmnd) == 0) {
+
+      state = STATE_COLOR;
+      stateStart = millis();
+
+      int r = message["red"] | 255;
+      int g = message["green"] | 255;
+      int b = message["blue"] | 255;
+      ledSetAllPixels(strip.Color(r, g, b));
+
+    }
+
+    if (strcmp("clear", cmnd) == 0) {
+
+      state = STATE_DEFAULT;
+      stateStart = millis();
+
+      strip.setBrightness(50);
+      strip.clear();
+      strip.show();
+
     }
 
   }
+  jsonBuffer.clear();
 
+  // Publish base data
   client.publish(topic_stat.c_str(), getBaseData().c_str());
 
 }
@@ -328,17 +385,52 @@ void setup() {
   client.setServer(config.mqttServer, 1883);
   client.setCallback(callback);
 
+  // announce yourself to the broker
+  client.publish(topic_tele.c_str(), getStatus().c_str());
+
+  // give visual feedback
   ledSetAllPixels(strip.Color(0,255,0));
-  delay(1000);
-  strip.clear();
-  strip.show();
+  state = STATE_BLINK;
+  stateStart = millis();
 
 }
 
 void loop() {
-  
+
   if (!client.connected()) {
+    ledSetAllPixels(strip.Color(255, 165, 0));
     reconnect();
+    strip.clear();
+    strip.show();
   }
   client.loop();
+
+  if (WiFi.status() != WL_CONNECTED) {
+    state = STATE_COLOR;
+    stateStart = millis();
+    ledSetAllPixels(strip.Color(137, 104, 205));
+  }
+
+  if (!client.connected()) {
+
+  }
+    
+  unsigned long now = millis();
+  if (now - lastMsg > INTERVAL_MEASUREMENT_MS) {
+    lastMsg = now;
+    client.publish(topic_tele.c_str(), getStatus().c_str());
+  }
+
+  switch (state) {
+    case STATE_DEFAULT:
+      strip.clear();
+      strip.show();
+      break;
+    case STATE_COLOR:
+      break;
+    case STATE_BLINK:
+      ledBlink();
+      break;
+  }  
+
 }
