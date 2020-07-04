@@ -17,7 +17,7 @@
 #define VERSION "1.1.1"
 #define INTERVAL_MEASUREMENT_MS 60UL * 1000UL
 
-#define MQTT_TOPIC_CMND_GROUP "cmnd/esp8266"
+#define MQTT_TOPIC_CMND_GROUP "cmnd/nodemcu"
 
 #define MQTT_TOPIC_TASMOTE_POWER "stat/tasmota_AF39DC/POWER"
 
@@ -28,7 +28,7 @@
 #define TELE_STATE "/STATE"
 #define TELE_LWT "/LWT"
 
-#define PREFIX_CLIENT_NAME "esp8266"
+#define PREFIX_CLIENT_NAME "nodemcu"
 #define LWT_CONNECTED "Online"
 #define LWT_DISCONNECTED "Disconnected"
 
@@ -58,12 +58,13 @@ String topic_tele;
 String topic_lwt;
 String topic_stat;
 String topic_cmnd;
-String topic_cmd_pulse;
+String topic_stat_mode;
 
 unsigned long lastMsg = 0;
 
 String states[] = {"START", "DEFAULT", "COLOR", "BLINK"};
 short state = STATE_START;
+short prevState = STATE_START;
 unsigned long stateStart;
 short brightness = 50;
 
@@ -158,7 +159,7 @@ void createTopics() {
   topic_lwt = (MQTT_TOPIC_PREFIX_TELE + mqttClientName + "/LWT").c_str();
   topic_stat = (MQTT_TOPIC_PREFIX_STAT + mqttClientName + "/RESULT").c_str();
   topic_cmnd = (MQTT_TOPIC_PREFIX_CMD + mqttClientName).c_str();
-  topic_cmd_pulse = (MQTT_TOPIC_PREFIX_CMD + mqttClientName + "/pulse");
+  topic_stat_mode = (MQTT_TOPIC_PREFIX_STAT + mqttClientName + "/MODE").c_str();
 
 }
 
@@ -194,6 +195,8 @@ void reconnect() {
   // Loop until we're reconnected
   while (!client.connected()) {
 
+    client.disconnect();
+
     // Create a random client ID
     String clientId = mqttClientName;
     client.setKeepAlive(120);
@@ -208,7 +211,6 @@ void reconnect() {
       // ... and resubscribe
       client.subscribe(MQTT_TOPIC_CMND_GROUP);
       client.subscribe(topic_cmnd.c_str());
-      client.subscribe(topic_cmd_pulse.c_str());
 
       // subscribe to tasmota topic
       client.subscribe(MQTT_TOPIC_TASMOTE_POWER);
@@ -229,8 +231,8 @@ void reconnect() {
 String getBaseData() {
 
   String json = "{";
-  json += "\"software_project\": " + String(PROJECT) + ", ";
-  json += "\"software_version\": " + String(VERSION) + ", ";
+  json += "\"software_project\": \"" + String(PROJECT) + "\", ";
+  json += "\"software_version\": \"" + String(VERSION) + "\", ";
   json += "\"wifi_ip_address\": \"" + ipAddress + "\", ";
   json += "\"mqtt_client_name\": \"" + mqttClientName + "\"";
   json += "}";
@@ -262,7 +264,7 @@ String getBaseData() {
 String getStatus() {
 
   String json = "{";
-  json += "\"item_state\": \"" + states[state] + "\", ";
+  //json += "\"item_state\": \"" + states[state] + "\", ";
   json += "\"uptime\": " + String(millis()) + ", ";
   json += "\"wifi_signal_rssi\": " + String(WiFi.RSSI());
   json += "}";
@@ -418,7 +420,7 @@ void loop() {
   unsigned long now = millis();
   if (now - lastMsg > INTERVAL_MEASUREMENT_MS) {
     lastMsg = now;
-    client.publish(topic_tele.c_str(), getStatus().c_str());
+    client.publish(topic_tele.c_str(), getStatus().c_str(), true);
   }
 
   switch (state) {
@@ -431,6 +433,11 @@ void loop() {
     case STATE_BLINK:
       ledBlink();
       break;
-  }  
+  } 
+
+  if (prevState != state) {
+    prevState = state;
+    client.publish(topic_stat_mode.c_str(), states[state].c_str(), true);
+  } 
 
 }
