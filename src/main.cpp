@@ -199,7 +199,7 @@ void reconnect() {
 
     // Create a random client ID
     String clientId = mqttClientName;
-    client.setKeepAlive(120);
+    //client.setKeepAlive(120);
     Serial.printf("Attempting MQTT connection to server %s as %s ... ", config.mqttServer, clientId.c_str());
     
     // Attempt to connect
