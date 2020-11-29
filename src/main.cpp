@@ -28,7 +28,7 @@
 #define TELE_STATE "/STATE"
 #define TELE_LWT "/LWT"
 
-#define PREFIX_CLIENT_NAME "nodemcu"
+#define PREFIX_CLIENT_NAME "esp8266"
 #define LWT_CONNECTED "Online"
 #define LWT_DISCONNECTED "Disconnected"
 
